@@ -1,7 +1,3 @@
-//
-// Created by 郑文鑫 on 2019-03-09.
-//
-
 #include "utility.hpp"
 #include <functional>
 #include <cstddef>
