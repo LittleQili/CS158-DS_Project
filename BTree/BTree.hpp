@@ -3,12 +3,29 @@
 #include <cstddef>
 #include "exception.hpp"
 namespace sjtu {
-template <class Key, class Value, class Compare = std::less<Key> >
-class BTree {
- private:
-  // Your private members go here
- public:
-  typedef pair<const Key, Value> value_type;
+//#define _NO_DEBUG
+    template <class Key, class Value, class Compare = std::less<Key> >
+    class BTree {
+#ifndef _NO_DEBUG
+    private:
+#else
+    public:
+#endif
+        // Your private members go here
+        struct Node_common{
+
+        };
+        struct Node_leaf{
+
+        };
+#ifndef _NO_DEBUG
+    private:
+#else
+    public:
+#endif
+        //这里用来声明（以及实现）所有IO相关的函数
+    public:
+        typedef pair<const Key, Value> value_type;
 
   class const_iterator;
   class iterator {
