@@ -4,25 +4,51 @@
 #include "exception.hpp"
 namespace sjtu {
 //#define _NO_DEBUG
+    typedef int PTR_file;//？？我实在不清楚指针到底使用什么数据类型，所以就用这个来代替吧
+    static const size_t MAX_OF_INDEX = 256;//实在不清楚应有大小
+    static const size_t MAX_OF_LEAF = 256;//同上
     template <class Key, class Value, class Compare = std::less<Key> >
     class BTree {
 #ifndef _NO_DEBUG
     private:
 #else
-    public:
+        public:
 #endif
         // Your private members go here
+        struct Data_common{
+            Key key;
+            PTR_file child;
+        };
+        struct Data_leaf{
+            Key key;
+            Value data;
+        };
         struct Node_common{
-
+            PTR_file father;
+            PTR_file prev,next;
+            Data_common index[MAX_OF_INDEX];
         };
         struct Node_leaf{
-
+            PTR_file father;
+            PTR_file prev,next;
+            Data_leaf leaf[MAX_OF_LEAF];
         };
 #ifndef _NO_DEBUG
     private:
 #else
-    public:
+        public:
 #endif
+        //这里用来声明（以及实现）所有IO相关的函数，一定要注意它的可移植性
+        /*
+         * 建树、建立节点相关函数，用在构造函数里面调用setroot,
+         * 用于构造函数以及分裂到根节点之后重新建树
+         * allocate，用于定位到文件最后，给人一种分配空间的想法
+         */
+
+        //读取相关函数，从文件中取到内存里面
+        /*reach_from_root
+         *
+         */
         //这里用来声明（以及实现）所有IO相关的函数
     public:
         typedef pair<const Key, Value> value_type;
