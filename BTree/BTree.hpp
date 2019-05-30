@@ -4,11 +4,33 @@
 #include "exception.hpp"
 namespace sjtu {
 //#define _NO_DEBUG
-    typedef int PTR_file;//？？我实在不清楚指针到底使用什么数据类型，所以就用这个来代替吧
-    static const size_t MAX_OF_INDEX = 256;//实在不清楚应有大小
-    static const size_t MAX_OF_LEAF = 256;//同上
+    typedef int PTR_infile;//？？我实在不清楚指针到底使用什么数据类型，所以就用这个来代替吧
+    typedef FILE* PTR_file;//容易混淆，目前使用FILE去定义
+    typedef size_t Numtype;
+    static const Numtype MAX_OF_INDEX = 256;//实在不清楚应有大小
+    static const Numtype MAX_OF_LEAF = 256;//同上
+    static const Numtype MAX_OF_FILENAME = 256;
     template <class Key, class Value, class Compare = std::less<Key> >
     class BTree {
+        //内存里记录的数据。
+#ifndef _NO_DEBUG
+    private:
+#else
+        public:
+#endif
+        mutable bool isFileOpen = false;
+        mutable FILE* file_now = nullptr;
+        const char name_file[MAX_OF_FILENAME];
+        int height = 0;
+        //节点设置
+    public://？？？不清楚应该是什么
+        //它应该始终放在文件首
+        struct BPT{
+            PTR_infile root;
+            PTR_infile firstleafnode;
+            Numtype sumnum_data;
+            //PTR_infile end_file = SEEK_END;
+        };
 #ifndef _NO_DEBUG
     private:
 #else
@@ -17,39 +39,55 @@ namespace sjtu {
         // Your private members go here
         struct Data_common{
             Key key;
-            PTR_file child;
+            PTR_infile child;
         };
         struct Data_leaf{
             Key key;
             Value data;
         };
         struct Node_common{
-            PTR_file father;
-            PTR_file prev,next;
+            PTR_infile father;
+            PTR_infile prev,next;
             Data_common index[MAX_OF_INDEX];
+            Numtype curnum_comon;
         };
         struct Node_leaf{
-            PTR_file father;
-            PTR_file prev,next;
+            PTR_infile father;
+            PTR_infile prev,next;
             Data_leaf leaf[MAX_OF_LEAF];
+            Numtype curnum_leaf;
         };
+        //工具函数集合
 #ifndef _NO_DEBUG
     private:
 #else
         public:
 #endif
-        //这里用来声明（以及实现）所有IO相关的函数，一定要注意它的可移植性
-        /*
+        /**
+         * 这里用来声明（以及实现）所有IO相关的函数，一定要注意它的可移植性
          * 建树、建立节点相关函数，用在构造函数里面调用setroot,
          * 用于构造函数以及分裂到根节点之后重新建树
          * allocate，用于定位到文件最后，给人一种分配空间的想法
          */
+        //Setroot,最初建树和分裂根节点都可以用，三个参数第一个true就是建空树。
+        void Setroot(bool isNewBPT = true,
+                     PTR_infile root_former = -1,PTR_infile root_newchild = -1){
 
+        };
         //读取相关函数，从文件中取到内存里面
+        //这个估计就是用来构造函数
+        void IO_iniBPT(){
+            if(file_now != nullptr) {
+                fclose(file_now);
+                fopen(name_file,"wb+");
+                fclose(file_now);
+            }
+            fopen(name_file,"rb+");
+
+        }
         /*reach_from_root
          *
          */
-        //这里用来声明（以及实现）所有IO相关的函数
     public:
         typedef pair<const Key, Value> value_type;
 
