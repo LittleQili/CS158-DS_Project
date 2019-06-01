@@ -4,74 +4,221 @@
 #include "exception.hpp"
 #include <map>
 #include <cstdio>
+#include <cstring>
 
 namespace sjtu {
-#define NONEX_FILE nullptr;
     typedef long PTR_FILE_CONT;//说实话这个我真的不知道应该设置为哪种数据类型。
     const int IOnum = 4096;
-
     //目前选择写在一个文件里面吧，这样的IO次数可能也不多。
-//#define IS_STRUCTURING_IO_index
-#define IS_STRUCTURING_IO_content
     const char EMPTY_NAME_FILE = '\0';
-    class IO_index{
-        //data members
-#ifdef IS_STRUCTURING_IO_index
-        public:
-#else
-    private:
-#endif
-        FILE* ptr_file = NONEX_FILE;
-        char name[55] = {EMPTY_NAME_FILE};
-        PTR_FILE_CONT endoffset_file = 0;
-        bool isopen = false;
-
-        //func members
-        void IO_init(){};
-        void IO_getblock(char*){};//<=>read(),用学长说过的读入优化
-        void IO_write(){};
-        void IO_open(){};
-        void IO_close(){};
-        void IO_clear(){};
-        bool isOpen(){
-            return isopen;
-        }
-    };
-    /*class IO_content{
-#ifdef IS_STRUCTURING_IO_content
-        public:
-#else
-    private:
-#endif
-        FILE* ptr_file = NONEX_FILE;
-        char name[55] = {EMPTY_NAME_FILE};
-        PTR_FILE_CONT endoffset_file = 0;
-        bool isopen = false;
-    };*/
+    const size_t CHAR_SIZE = sizeof(char);
+    const size_t PTR_FILE_SIZE = sizeof(PTR_FILE_CONT);
+    const size_t MAX_NUM_STACK = 100;
 
 #define IS_STRUCTURING_BPT
     template <class Key, class Value, class Compare = std::less<Key> >
     class BTree {
+    private:
+        struct data_index;
+        struct data_leaf;
 #ifdef IS_STRUCTURING_BPT
     public:
 #else
         private:
 #endif
-        //const size_t
+        static const size_t MAX_NUM_INDEX = (IOnum - 4 * PTR_FILE_SIZE - sizeof(short)
+                                             - sizeof(char)) / sizeof(data_index);
+        static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
+                                            - sizeof(char)) / sizeof(data_leaf);
         // Your private members go here
-#ifdef IS_STRUCTURING_BPT
-    public:
-#else
+    private:
+        struct data_index{
+            PTR_FILE_CONT prev;
+            Key keydata;
+        };
+        struct data_leaf{
+            Key keydata;
+            Value valdata;
+        };
+        struct Node_index{
+            const char type = 'i';
+            PTR_FILE_CONT myself;//不知道这个到底有没有必要？？？
+            PTR_FILE_CONT next,prev;
+            PTR_FILE_CONT maxchild;
+            short curnum = 0;
+            data_index index[MAX_NUM_INDEX];
+        };
+        struct Node_leaf{
+            const char type = 'l';
+            PTR_FILE_CONT myself;//不知道这个到底有没有必要？？？
+            PTR_FILE_CONT next,prev;
+            short curnum = 0;
+            data_leaf leaf[MAX_NUM_LEAF];
+        };
+        //root:最初始的值就是紧接着BPT之后的一个4k块，之后的话就不好说了，可以随便指向哪里
+        //endoffset_file:文件的最后一个byte的offset,文件空的时候为0.
+        //firstleaf：最初始不就是root嘛？
+        struct BPT{
+            PTR_FILE_CONT root = sizeof(BPT);
+            PTR_FILE_CONT firstleaf = sizeof(BPT);
+            PTR_FILE_CONT endoffset_file = 0;
+            long sumnum_data = 0;
+            int height = 0;
+        };
+
+        class myStack{
         private:
-#endif
-        IO_index io;//???
+            Node_index **index;
+            size_t curnum = 0;
+            size_t curmax = MAX_NUM_STACK;
+            void doublespace(){
+                Node_index** del = index;
+                index = new Node_index*[curmax * 2];
+                for(size_t i = 0;i < curnum;++i)
+                    index[i] = del[i];
+                curmax *= 2;
+                for(size_t i = curnum;i < curmax;++i)
+                    index[i] = nullptr;
+                delete []del;
+            }
+        public:
+            myStack():curmax(MAX_NUM_STACK){
+                index = new Node_index*[curmax];
+                for(int i = 0;i < curmax;++i)
+                    index[i] = nullptr;
+            }
+            void push(Node_index* tmpindex){
+                if(curnum == curmax)doublespace();
+                if(!index[curnum]) index[curnum] = new Node_index;
+                *(index[curnum]) = *(tmpindex);
+                ++curnum;
+            }
+            Node_index pop(){
+                --curnum;
+                Node_index tmp = *(index[curnum]),*del = index[curnum];
+                index[curnum] = nullptr;
+                delete del;
+                return tmp;
+            }
+            void clear(){
+                Node_index* del;
+                for(int i = 0;i < curnum;++i){
+                    del = index[i];
+                    index[i] = nullptr;
+                    delete del;
+                }
+                curnum = 0;
+            }
+            ~myStack(){
+                for(int i = 0;i < curnum;++i)
+                    delete index[i];
+                delete []index;
+            }
+        };
+
+    public://说实话感觉这里面有些东西不应该是public，写完再说
         char *buffer = new char[IOnum];
+        BPT* BPlusTree = new BPT;
+        myStack indexstack;
+        Node_index *tmpindex = nullptr;//我想用栈！！！！！！！懒人不想自己写。没错。
+        Node_leaf *leaf = nullptr,*tmpleaf = nullptr;//不知道tmpleaf能否用上？？？
+        //IO members
+        FILE* ptr_file = nullptr;
+        char name[55] = {EMPTY_NAME_FILE};
+        bool isopen = false;
+
+        //IO func members
+        /*
+         * 关于cstdio中函数的使用说明：
+         *fopen：开文件时一定得左边放一个FILE指针。
+         *在每次fread之前一定得来个fseek,并且一定要seek到要读的一位之前。
+         *   例：SEEK_SET等价于0，read出来就是从1开始读。
+         *每次都读出定长，就可以避免出现：有一次比之前读的少，但是字符串长度未改变的尴尬情形。
+         */
+        //allocator,as well as modify endoffset_file.
+        inline PTR_FILE_CONT alloc(PTR_FILE_CONT need){
+            PTR_FILE_CONT tmp = BPlusTree->endoffset_file;
+            fseek(ptr_file,0,SEEK_END);
+            BPlusTree->endoffset_file += need;
+            return tmp;
+        };
+        //这个应该理解为删除吧？？？
+        void dealloc(){
+
+        };
+        //仅供default构造函数使用。没有写复制构造相关的。
+        void IO_init(){
+            if(isopen){
+                if(!fclose(ptr_file)) throw "in IO_init:the file cannot be renewed.";
+                ptr_file = fopen(name,"wb+");
+                if(ptr_file == nullptr)throw "in IO_init:the file cannot be initialed.";
+            }else{
+                ptr_file = fopen(name,"wb+");
+                if(ptr_file == nullptr)throw "in IO_init:the file cannot be initialed.";
+                isopen = true;
+            }
+            alloc(sizeof(BPT));
+            int tmp = fwrite(BPlusTree, sizeof(BPT),1,ptr_file);
+            if(!tmp) throw "in IO_init:cannot write node BPT";
+            fflush(ptr_file);
+        };
+        //0表示空树，1表示普通节点，2表示叶节点
+        //<=>read(),用学长说过的读入优化
+        char IO_getblock(PTR_FILE_CONT beg){
+            if(BPlusTree->sumnum_data == 0)
+                return '0';
+            fseek(ptr_file,beg,SEEK_SET);
+            fread(buffer, sizeof(char),IOnum,ptr_file);
+            if(*buffer == 'i'){
+                if(tmpindex == nullptr) tmpindex = new Node_index;
+                memcpy(tmpindex,buffer,sizeof(Node_index));
+                indexstack.push(tmpindex);
+                return '1';
+            }else if(*buffer == 'l'){
+                if(leaf == nullptr) leaf = new Node_leaf;
+                memcpy(leaf,buffer,sizeof(Node_leaf));
+                return '2';
+            }
+            if(*buffer == 'd')
+                throw "in IO_getblock:this block has been deleted...";
+            throw "in IO_getblock:invalid buffer block!!!Oh NO!!!";
+        }
+
+        inline void IO_write(Node_leaf* tmpl){
+            if(tmpl == nullptr)throw "in IO_write_leaf:the leaf is null= =";
+            if(!(tmpl->type == 'l'||tmpl->type == 'd'))
+                throw "in IO_write_leaf:invalid leafnode= =";
+
+            memcpy(tmpl,buffer, sizeof(Node_leaf));
+            fseek(ptr_file,tmpl->myself,SEEK_SET);
+            int tmp = fwrite(buffer, sizeof(char),IOnum,ptr_file);
+            if(!tmp) throw "in IO_write_leaf:cannot fwrite";
+        };
+        inline void IO_write(Node_index* tmpi){
+            if(tmpi == nullptr)throw "in IO_write_index:the index is null= =";
+            if(!(tmpi->type == 'i'||tmpi->type == 'd'))
+                throw "in IO_write_index:invalid indexnode= =";
+
+            memcpy(tmpi,buffer, sizeof(Node_index));
+            fseek(ptr_file,tmpi->myself,SEEK_SET);
+            int tmp = fwrite(buffer, sizeof(char),IOnum,ptr_file);
+            if(!tmp) throw "in IO_write_index:cannot fwrite";
+        };
+
+        void IO_open(){};
+        void IO_close(){};
+        void IO_clear(){};
 
     public:
-
+        //和上面的getblock相对应。
+        PTR_FILE_CONT seekblock_index(Node_index* index,Key findingkey){
+            if(index == nullptr) throw "in seekblock_index:index not exist";
+            for(int i = 0;i < index->curnum;++i)
+                if(findingkey < index->index[i].keydata) return index->index[i].prev;
+            return index->maxchild;
+        }
     public:
         typedef pair<const Key, Value> value_type;
-
 
         class const_iterator;
         class iterator {
