@@ -28,8 +28,10 @@ namespace sjtu {
 #endif
         static const size_t MAX_NUM_INDEX = (IOnum - 4 * PTR_FILE_SIZE - sizeof(short)
                                              - sizeof(char)) / sizeof(data_index);
+        static const size_t MIN_NUM_INDEX = MAX_NUM_INDEX>>1;
         static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
                                             - sizeof(char)) / sizeof(data_leaf);
+        static const size_t MIN_NUM_LEAF = MAX_NUM_LEAF>>1;
         // Your private members go here
     private:
         struct data_index{
@@ -58,6 +60,7 @@ namespace sjtu {
         //root:最初始的值就是紧接着BPT之后的一个4k块，之后的话就不好说了，可以随便指向哪里
         //endoffset_file:文件的最后一个byte的offset,文件空的时候为0.
         //firstleaf：最初始不就是root嘛？
+        //等等，这里的初始值似乎有点问题。应该等第一个块插进来之后再去modify root和firstleaf的值。
         struct BPT{
             PTR_FILE_CONT root = sizeof(BPT);
             PTR_FILE_CONT firstleaf = sizeof(BPT);
@@ -211,7 +214,7 @@ namespace sjtu {
 
     public:
         //和上面的getblock相对应。
-        PTR_FILE_CONT seekblock_index(Node_index* index,Key findingkey){
+        inline PTR_FILE_CONT seekblock_index(Node_index* index,Key findingkey){
             if(index == nullptr) throw "in seekblock_index:index not exist";
             for(int i = 0;i < index->curnum;++i)
                 if(findingkey < index->index[i].keydata) return index->index[i].prev;
@@ -222,17 +225,28 @@ namespace sjtu {
 
         class const_iterator;
         class iterator {
+            friend class BTree;
         private:
             // Your private members go here
+            BTree* Tree;
+            PTR_FILE_CONT offset_leafnode;//记录所在叶子节点的块
+            short pos_in_leafnode;
         public:
             bool modify(const Value& value){
 
             }
             iterator() {
-                // TODO Default Constructor
+                Tree = nullptr;//why?是不是因为它读不成自己所在的树
+                offset_leafnode = 0;
+                pos_in_leafnode = -1;//为了防止重叠就将空的设为1趴
             }
+            iterator(BTree* t,PTR_FILE_CONT o,short p)
+                    :Tree(t),offset_leafnode(o),pos_in_leafnode(p)
+            {};
             iterator(const iterator& other) {
-                // TODO Copy Constructor
+                Tree = other.Tree;
+                offset_leafnode = other.offset_leafnode;
+                pos_in_leafnode = other.pos_in_leafnode;
             }
             // Return a new iterator which points to the n-next elements
             iterator operator++(int) {
@@ -267,16 +281,28 @@ namespace sjtu {
             //  and it should be able to construct from an iterator.
         private:
             // Your private members go here
+            BTree* Tree;
+            PTR_FILE_CONT offset_leafnode;//记录所在叶子节点的块
+            int pos_in_leafnode;
         public:
             const_iterator() {
-                // TODO
+                Tree = nullptr;//why?是不是因为它读不成自己所在的树
+                offset_leafnode = 0;
+                pos_in_leafnode = -1;//为了防止重叠就将空的设为1趴
             }
             const_iterator(const const_iterator& other) {
-                // TODO
+                Tree = other.Tree;
+                offset_leafnode = other.offset_leafnode;
+                pos_in_leafnode = other.pos_in_leafnode;
             }
             const_iterator(const iterator& other) {
-                // TODO
+                Tree = other.Tree;
+                offset_leafnode = other.offset_leafnode;
+                pos_in_leafnode = other.pos_in_leafnode;
             }
+            const_iterator(BTree* t,PTR_FILE_CONT o,short p)
+                    :Tree(t),offset_leafnode(o),pos_in_leafnode(p)
+            {};
             // And other methods in iterator, please fill by yourself.
         };
         // Default Constructor and Copy Constructor
