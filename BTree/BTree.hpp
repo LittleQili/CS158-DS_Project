@@ -140,6 +140,7 @@ namespace sjtu {
          * 如果你准备删了他们的话，要同时删：
          * 构造函数
          */
+        bool isbuildchain;
         myStack* indexstack;
         Node_index *tmpindex;//我想用栈！！并且自己写了一个，但是不清楚具体的用途怎样。
         Node_leaf *leaf,*tmpleaf;//不知道tmpleaf能否用上？？？
@@ -154,7 +155,7 @@ namespace sjtu {
          * IO_alloc(需要开辟空间的大小):开辟一块新的空间（即文件尾位置的更改），将文件指针指向新空间并且准备写入。
          * IO_init():打开/创立一个空的文件。并将BPT基本的初始化信息写入
          * IO_destruct():关闭文件。
-         * IO_getblock(begin):从begin处读入4K块，如果是索引就进栈，叶子存入leaf且仅允许写入一次。
+         * IO_getchain(begin):从begin处读入4K块，如果是索引就进栈。无法判断叶子节点被写了几次。
          *                    返回值：1表示索引节点，2表示叶节点。
          * IO_getleaf():将leaf节点内容写入tmpleaf指针。
          * IO_getnodeBPT():读取BPT基本信息。
@@ -195,9 +196,11 @@ namespace sjtu {
             }
         }
 
-        char IO_getblock(PTR_FILE_CONT beg){
+        char IO_getchain(PTR_FILE_CONT beg){
             if(empty()) throw "in IO_getblock:the tree is empty";
 
+            new_chain();
+            isbuildchain = true;
             fseek(ptr_file,beg,SEEK_SET);
             fread(buffer, sizeof(char),IOnum,ptr_file);
             if(*buffer == 'i'){
@@ -206,8 +209,6 @@ namespace sjtu {
                 indexstack->push(tmpindex);
                 return '1';
             }else if(*buffer == 'l'){
-                if(leaf == nullptr) leaf = new Node_leaf;
-                else throw "in IO_getblock:try to read into leaf twice in one process.";
                 memcpy(leaf,buffer,sizeof(Node_leaf));
                 return '2';
             }
@@ -270,6 +271,8 @@ namespace sjtu {
         /**all short func__reference
          * new_tmpleaf():清除tmpleaf中的原有内容，建立一个新的tmpleaf,以防止内存泄漏。
          * new_tmpindex()：同上。
+         * new_chain():准备从文件里读取一个新的链。
+         * destroy_chain():在每一次修改树之后都要进行的操作。
          */
         inline void new_tmpleaf(){
             if(tmpleaf != nullptr){
@@ -278,19 +281,38 @@ namespace sjtu {
             }
             tmpleaf = new Node_leaf;
         }
-        inline void new_leaf(){
-            if(leaf != nullptr){
-                Node_leaf* del = leaf;
-                delete del;
-            }
-            leaf = new Node_leaf;
-        }
         inline void new_tmpindex(){
             if(tmpindex != nullptr){
                 Node_index* del = tmpindex;
                 delete del;
             }
             tmpindex = new Node_index;
+        }
+        inline void new_chain(){
+            if(indexstack != nullptr){
+                myStack *del = indexstack;
+                delete del;
+            }
+            indexstack = new myStack;
+
+            if(leaf != nullptr){
+                Node_leaf* del = leaf;
+                delete del;
+            }
+            leaf = new Node_leaf;
+        }
+        inline void destroy_chain(){
+            if(indexstack != nullptr){
+                myStack *del = indexstack;
+                delete del;
+            }
+            indexstack = nullptr;
+
+            if(leaf != nullptr){
+                Node_leaf* del = leaf;
+                delete del;
+            }
+            leaf = nullptr;
         }
         /**end func members__reference
          * End_getleaf():用于获得最后的叶子节点。
@@ -326,11 +348,11 @@ namespace sjtu {
             }
             return -1;
         }
-        void Find_getchain(const Key& key){
+        inline void Find_getchain(const Key& key){
             char stat = IO_getblock(BPlusTree->root);
             while(stat == '1'){
                 PTR_FILE_CONT tmpnext = Find_seek_index(tmpindex,key);
-                stat = IO_getblock(tmpnext);
+                stat = IO_getchain(tmpnext);
             }
         }
     public:
@@ -419,10 +441,9 @@ namespace sjtu {
             // And other methods in iterator, please fill by yourself.
         };
         // Default Constructor and Copy Constructor
-        BTree():ptr_file(nullptr),isopen(false),
-                tmpindex(nullptr),tmpleaf(nullptr),leaf(nullptr){
+        BTree():ptr_file(nullptr),isopen(false),isbuildchain(false),
+                tmpindex(nullptr),tmpleaf(nullptr),leaf(nullptr),indexstack(nullptr){
             BPlusTree = new BPT;
-            indexstack = new myStack;
             name = strcpy(name,EMPTY_NAME_FILE);
             IO_init();
         }
@@ -479,6 +500,7 @@ namespace sjtu {
             return const_iterator(this,BPlusTree->firstleaf,0);
         }
         // Return a iterator to the end(the next element after the last)
+        ///如果是空树的话到底返回什么呢？
         iterator end() {
             if(empty()){
                 //以下这个if表示对firstleaf的完全信任。
@@ -539,6 +561,8 @@ namespace sjtu {
         }
         // Return the value refer to the Key(key)
         Value at(const Key& key){
+            const_iterator tmp = find(key);
+
         }
         /**
          * Returns the number of elements with key
@@ -557,9 +581,36 @@ namespace sjtu {
          */
         ///问题：如果是空树应该怎么办呢？
         iterator find(const Key& key) {
-            if(empty()) throw "in find:try to find in an empty tree";
-
+            if(empty()) throw "in find1:try to find in an empty tree";
+            short pos;
+            if(isbuildchain) {
+                if(key <= leaf->leaf[leaf->curnum - 1].keydata
+                   &&key >= leaf->leaf[0].keydata){
+                    pos = Find_seek_leaf(leaf,key);
+                    if(pos != -1) return iterator(this,leaf->myself,pos);
+                    else return end();
+                }
+            }
+            Find_getchain(key);
+            pos = Find_seek_leaf(leaf,key);
+            if(pos != -1) return iterator(this,leaf->myself,pos);
+            else return end();
         }
-        const_iterator find(const Key& key) const {}
+        const_iterator find(const Key& key) const {
+            if(empty()) throw "in find1:try to find in an empty tree";
+            short pos;
+            if(isbuildchain) {
+                if(key <= leaf->leaf[leaf->curnum - 1].keydata
+                   &&key >= leaf->leaf[0].keydata){
+                    pos = Find_seek_leaf(leaf,key);
+                    if(pos != -1) return const_iterator(this,leaf->myself,pos);
+                    else return end();
+                }
+            }
+            Find_getchain(key);
+            pos = Find_seek_leaf(leaf,key);
+            if(pos != -1) return const_iterator(this,leaf->myself,pos);
+            else return end();
+        }
     };
 }  // namespace sjtu
