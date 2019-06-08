@@ -199,7 +199,6 @@ namespace sjtu {
         char IO_getchain(PTR_FILE_CONT beg){
             if(empty()) throw "in IO_getblock:the tree is empty";
 
-            new_chain();
             isbuildchain = true;
             fseek(ptr_file,beg,SEEK_SET);
             fread(buffer, sizeof(char),IOnum,ptr_file);
@@ -331,7 +330,8 @@ namespace sjtu {
         /**find func members__reference
          * Find_seek_index()查找index中块的相对位置，返回值为下一级索引或着叶子的索引。
          * Find_seek_leaf()查找leaf中具体数据的位置，返回偏移量。如果没有相应key的话返回-1.
-         *
+         * Find_getchain():用于获得完整的从根到叶子的一条链。每次获得会将之前获得的chain全部清除。
+         *                 但是不能更改isbuildchain的值
          */
         inline PTR_FILE_CONT Find_seek_index(Node_index* index,const Key& findingkey){
             if(index == nullptr) throw "in F_seek_index:index not exist";
@@ -349,7 +349,8 @@ namespace sjtu {
             return -1;
         }
         inline void Find_getchain(const Key& key){
-            char stat = IO_getblock(BPlusTree->root);
+            new_chain();
+            char stat = IO_getchain(BPlusTree->root);
             while(stat == '1'){
                 PTR_FILE_CONT tmpnext = Find_seek_index(tmpindex,key);
                 stat = IO_getchain(tmpnext);
@@ -475,6 +476,7 @@ namespace sjtu {
             return Fail;  // If you can't finish erase part, just remaining here.
         }
         // Return a iterator to the beginning
+        ///如果是空树的话到底返回什么呢？
         iterator begin() {
             if(empty()){
                 //以下这个if表示对firstleaf的完全信任。
@@ -543,12 +545,8 @@ namespace sjtu {
         void clear() {
             IO_destruct();
             BPT* tmpbpt = BPlusTree;BPlusTree = new BPT;if(tmpbpt != nullptr)delete tmpbpt;
-            myStack* tmpstack = indexstack;indexstack = new myStack;
-            if(tmpstack != nullptr)delete indexstack;
-            if(leaf != nullptr){
-                delete leaf;
-                leaf = nullptr;
-            }
+            if(isbuildchain) destroy_chain();
+            isbuildchain = false;
             if(tmpleaf != nullptr){
                 delete tmpleaf;
                 tmpleaf = nullptr;
@@ -562,13 +560,15 @@ namespace sjtu {
         // Return the value refer to the Key(key)
         Value at(const Key& key){
             const_iterator tmp = find(key);
-
+            if(tmp == cend()) throw "in at:key not exist";
+            return leaf->leaf[tmp.pos_in_leafnode].valdata;
         }
         /**
          * Returns the number of elements with key
          *   that compares equivalent to the specified argument,
          * The default method of check the equivalence is !(a < b || b > a)
          */
+        ///这**是想干什么啊……
         size_t count(const Key& key) const {
 
         }
@@ -578,6 +578,8 @@ namespace sjtu {
          * Iterator to an element with key equivalent to key.
          *   If no such element is found, past-the-end (see end()) iterator is
          * returned.
+         *
+         * 同时完成getchain的功能，并做了一点点优化，在leaf未发生改变的时候不重新读入。
          */
         ///问题：如果是空树应该怎么办呢？
         iterator find(const Key& key) {
@@ -591,26 +593,30 @@ namespace sjtu {
                     else return end();
                 }
             }
+            else isbuildchain = true;
+
             Find_getchain(key);
             pos = Find_seek_leaf(leaf,key);
             if(pos != -1) return iterator(this,leaf->myself,pos);
             else return end();
         }
         const_iterator find(const Key& key) const {
-            if(empty()) throw "in find1:try to find in an empty tree";
+            if(empty()) throw "in find2:try to find in an empty tree";
             short pos;
             if(isbuildchain) {
                 if(key <= leaf->leaf[leaf->curnum - 1].keydata
                    &&key >= leaf->leaf[0].keydata){
                     pos = Find_seek_leaf(leaf,key);
                     if(pos != -1) return const_iterator(this,leaf->myself,pos);
-                    else return end();
+                    else return cend();
                 }
             }
+            else isbuildchain = true;
+
             Find_getchain(key);
             pos = Find_seek_leaf(leaf,key);
             if(pos != -1) return const_iterator(this,leaf->myself,pos);
-            else return end();
+            else return cend();
         }
     };
 }  // namespace sjtu
