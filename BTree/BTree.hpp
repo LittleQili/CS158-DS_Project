@@ -25,11 +25,13 @@ namespace sjtu {
 #else
     private:
 #endif
-        static const size_t MAX_NUM_INDEX = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
-                                             - sizeof(char)) / sizeof(data_index);
+        static const size_t MAX_NUM_INDEX = 5;
+        //static const size_t MAX_NUM_INDEX = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
+        //                                     - sizeof(char)) / sizeof(data_index);
         static const size_t MIN_NUM_INDEX = MAX_NUM_INDEX>>1;
-        static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
-                                            - sizeof(char)) / sizeof(data_leaf);
+        static const size_t MAX_NUM_LEAF = 4;
+        //static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
+        //                                  - sizeof(char)) / sizeof(data_leaf);
         static const size_t MIN_NUM_LEAF = MAX_NUM_LEAF>>1;
     private:
         ///所有的拷贝构造都没写，蛤。
@@ -75,6 +77,7 @@ namespace sjtu {
         };
 
         class myStack{
+            friend class BTree;
         private:
             Node_index **index;
             size_t curnum;
@@ -171,7 +174,7 @@ namespace sjtu {
         //allocator,as well as modify endoffset_file.
         inline PTR_FILE_CONT IO_alloc(PTR_FILE_CONT need = IOnum){
             PTR_FILE_CONT tmp = BPlusTree->endoffset_file;
-            fseek(ptr_file,0,SEEK_END);
+            fseek(ptr_file,tmp,SEEK_SET);
             BPlusTree->endoffset_file += need;
             return tmp;
         };
@@ -241,7 +244,7 @@ namespace sjtu {
             fread(buffer, sizeof(char),IOnum,ptr_file);
             if(*buffer == 'i'){
                 new_tmpindex();
-                memcpy(tmpindex,buffer,sizeof(Node_leaf));
+                memcpy(tmpindex,buffer,sizeof(Node_index));
                 return 'i';
             }
             if(*buffer == 'l') return 'l';
@@ -259,7 +262,7 @@ namespace sjtu {
             if(!(tmpl->type == 'l'||tmpl->type == 'd'))
                 throw "in IO_write_leaf:invalid leafnode= =";
 
-            memcpy(tmpl,buffer, sizeof(Node_leaf));
+            memcpy(buffer,tmpl, sizeof(Node_leaf));
             fseek(ptr_file,tmpl->myself,SEEK_SET);
             int tmp = fwrite(buffer, sizeof(char),IOnum,ptr_file);
             if(!tmp) throw "in IO_write_leaf:cannot fwrite";
@@ -270,7 +273,7 @@ namespace sjtu {
             if(!(tmpi->type == 'i'||tmpi->type == 'd'))
                 throw "in IO_write_index:invalid indexnode= =";
 
-            memcpy(tmpi,buffer, sizeof(Node_index));
+            memcpy(buffer,tmpi, sizeof(Node_index));
             fseek(ptr_file,tmpi->myself,SEEK_SET);
             int tmp = fwrite(buffer, sizeof(char),IOnum,ptr_file);
             if(!tmp) throw "in IO_write_index:cannot fwrite";
@@ -295,7 +298,9 @@ namespace sjtu {
         inline void new_tmpleaf(){
             if(tmpleaf != nullptr){
                 Node_leaf* del = tmpleaf;
+                tmpleaf = new Node_leaf;
                 delete del;
+                return;
             }
             tmpleaf = new Node_leaf;
         }
@@ -359,7 +364,7 @@ namespace sjtu {
 
             if(key < leaf->leaf[0].keydata) return 0;
             for(short i = 1;i < leaf->curnum;++i){
-                if(key < leaf->leaf[i]&&key > leaf->leaf[i - 1]) return i;
+                if(key < leaf->leaf[i].keydata&&key > leaf->leaf[i - 1].keydata) return i;
             }
             if(key > leaf->leaf[leaf->curnum - 1].keydata) return leaf->curnum;
 
@@ -368,7 +373,7 @@ namespace sjtu {
         inline void INS_getchain(const Key& key){
             new_chain();
             char stat = IO_getchain(BPlusTree->root);
-            while(stat == '1'){
+            while(stat == 'l'){
                 PTR_FILE_CONT tmpnext = Find_seek_index(tmpindex,key);
                 stat = IO_getchain(tmpnext);
             }
@@ -429,7 +434,7 @@ namespace sjtu {
             IO_write(leaf);
 
             info_pushup.next = tmpleaf->myself;
-            info_pushup.keydata = tmpleaf->leaf[0].data;
+            info_pushup.keydata = tmpleaf->leaf[0].keydata;
         }
         void INS_splitindex(data_index &info_pushup,Node_index &index){
             new_tmpindex();
@@ -458,6 +463,7 @@ namespace sjtu {
             IO_write(tmpindex);
 
             ++BPlusTree->height;
+            BPlusTree->root = tmpindex->myself;
             IO_write_nodeBPT();
         }
         /**find func members__reference
@@ -497,6 +503,7 @@ namespace sjtu {
         class const_iterator;
         class iterator {
             friend class BTree;
+            friend class const_iterator;
         private:
             // Your private members go here
             BTree* Tree;
@@ -535,19 +542,27 @@ namespace sjtu {
             // Overloaded of operator '==' and '!='
             // Check whether the iterators are same
             bool operator==(const iterator& rhs) const {
-                // Todo operator ==
+                if(rhs.Tree == Tree&&rhs.offset_leafnode == offset_leafnode
+                   &&rhs.pos_in_leafnode == pos_in_leafnode)
+                    return true;
+                else return false;
             }
             bool operator==(const const_iterator& rhs) const {
-                // Todo operator ==
+                if(rhs.Tree == Tree&&rhs.offset_leafnode == offset_leafnode
+                   &&rhs.pos_in_leafnode == pos_in_leafnode)
+                    return true;
+                else return false;
             }
             bool operator!=(const iterator& rhs) const {
-                // Todo operator !=
+                return !(*this == rhs);
             }
             bool operator!=(const const_iterator& rhs) const {
-                // Todo operator !=
+                return !(*this == rhs);
             }
         };
         class const_iterator {
+            friend class iterator;
+            friend class BTree;
             // it should has similar member method as iterator.
             //  and it should be able to construct from an iterator.
         private:
@@ -575,12 +590,30 @@ namespace sjtu {
                     :Tree(t),offset_leafnode(o),pos_in_leafnode(p)
             {};
             // And other methods in iterator, please fill by yourself.
+            bool operator==(const iterator& rhs) const {
+                if(rhs.Tree == Tree&&rhs.offset_leafnode == offset_leafnode
+                   &&rhs.pos_in_leafnode == pos_in_leafnode)
+                    return true;
+                else return false;
+            }
+            bool operator==(const const_iterator& rhs) const {
+                if(rhs.Tree == Tree&&rhs.offset_leafnode == offset_leafnode
+                   &&rhs.pos_in_leafnode == pos_in_leafnode)
+                    return true;
+                else return false;
+            }
+            bool operator!=(const iterator& rhs) const {
+                return !(*this == rhs);
+            }
+            bool operator!=(const const_iterator& rhs) const {
+                return !(*this == rhs);
+            }
         };
         // Default Constructor and Copy Constructor
         BTree():ptr_file(nullptr),isopen(false),isbuildchain(false),
                 tmpindex(nullptr),tmpleaf(nullptr),leaf(nullptr),indexstack(nullptr){
             BPlusTree = new BPT;
-            name = strcpy(name,EMPTY_NAME_FILE);
+            strcpy(name,EMPTY_NAME_FILE);
             IO_init();
         }
         BTree(const BTree& other) {
@@ -615,25 +648,30 @@ namespace sjtu {
                 BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
                 IO_write_nodeBPT();
                 return pair<iterator, OperationResult>
-                        (iterator(this,tmpleaf->myself,0),Success);
+                        (iterator(),Success);
             }
             //非空，第一步正常find并且插入叶子。
             INS_inleaf(key,value);
             //之后“递归”修改并且写回文件
             //若不需要分裂,写入叶节点和基本信息即可。
             if(leaf->curnum < MAX_NUM_LEAF){
-                IO_write(tmpleaf);
+                IO_write(leaf);
                 IO_write_nodeBPT();
                 destroy_chain();
                 return pair<iterator, OperationResult>
-                        (iterator(this,leaf->myself,leaf->curnum - (short)1),Success);
+                        (iterator(),Success);
             }
 
             data_index info_pushup; //该变量用来存储向上传递的信息。
             PTR_FILE_CONT son = leaf->myself;//用于查找父亲中自己的位置。
             //分裂叶节点
             INS_splitleaf(info_pushup);
-            if(indexstack->isStackempty()) INS_resetroot(info_pushup);
+            if(BPlusTree->height <= 1) {
+                INS_resetroot(info_pushup);
+                destroy_chain();
+                return pair<iterator, OperationResult>
+                        (iterator(),Success);
+            }
             //向上插入
             Node_index tmpind = indexstack->pop();
             INS_inindex(info_pushup,tmpind,son);
@@ -654,7 +692,7 @@ namespace sjtu {
             }
             destroy_chain();
             return pair<iterator, OperationResult>
-                    (find(key),Success);
+                    (iterator(),Success);
         }
         // Erase: Erase the Key-Value
         // Return Success if it is successfully erased
@@ -747,8 +785,8 @@ namespace sjtu {
         }
         // Return the value refer to the Key(key)
         Value at(const Key& key){
-            const_iterator tmp = find(key);
-            if(tmp == cend()) throw "in at:key not exist";
+            iterator tmp = find(key);
+            if(tmp == end()) throw "in at:key not exist";
 
             IO_getleaf(tmp.offset_leafnode);
             return tmpleaf->leaf[tmp.pos_in_leafnode].valdata;
@@ -777,7 +815,7 @@ namespace sjtu {
             short pos;
             Find_getleaf(key);
             pos = Find_seek_leaf(tmpleaf,key);
-            if(pos != -1) return iterator(this,leaf->myself,pos);
+            if(pos != -1) return iterator(this,tmpleaf->myself,pos);
             else return end();
         }
         const_iterator find(const Key& key) const {
@@ -785,7 +823,7 @@ namespace sjtu {
             short pos;
             Find_getleaf(key);
             pos = Find_seek_leaf(tmpleaf,key);
-            if(pos != -1) return const_iterator(this,leaf->myself,pos);
+            if(pos != -1) return const_iterator();
             else return cend();
         }
     };
