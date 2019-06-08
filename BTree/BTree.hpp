@@ -33,6 +33,8 @@ namespace sjtu {
         static const size_t MIN_NUM_LEAF = MAX_NUM_LEAF>>1;
     private:
         ///所有的拷贝构造都没写，蛤。
+        //经过实验，节点类全都不需要构造函数和赋值重载。
+        //这充分证明了我程设学的有多不扎实。
         struct data_index{
             PTR_FILE_CONT next;
             Key keydata;
@@ -115,6 +117,7 @@ namespace sjtu {
                 }
                 curnum = 0;
             }
+            bool isStackempty(){return (curnum == 0);}
             ~myStack(){
                 for(int i = 0;i < curnum;++i)
                     delete index[i];
@@ -158,16 +161,18 @@ namespace sjtu {
          * IO_getchain(begin):从begin处读入4K块，如果是索引就进栈。无法判断叶子节点被写了几次。
          *                    返回值：1表示索引节点，2表示叶节点。
          * IO_getleaf():将leaf节点内容写入tmpleaf指针。
+         * IO_getindex():将index节点内容写入tmpindex指针。返回值：'i'表示正常情况，'l'表示读到叶节点。
          * IO_getnodeBPT():读取BPT基本信息。
          * IO_write():两个重载，分别处理叶子节点和普通节点的写入。
          * IO_write_nodeBPT():写入BPT中的基本信息。
          */
-        ///感觉getblock()会有危险，因为难以保证每次leaf用完之后会置空。等待改正。
+        //感觉IO_getchain()会有危险，因为难以保证每次leaf用完之后会置空。
+        //目前的解决方法：在每次调用IO_getchain之前都调用new_chain.
         //allocator,as well as modify endoffset_file.
         inline PTR_FILE_CONT IO_alloc(PTR_FILE_CONT need = IOnum){
             PTR_FILE_CONT tmp = BPlusTree->endoffset_file;
             fseek(ptr_file,0,SEEK_END);
-            BPlusTree->ndoffset_file += need;
+            BPlusTree->endoffset_file += need;
             return tmp;
         };
         //仅供default构造函数使用。没有写复制构造相关的。
@@ -229,6 +234,20 @@ namespace sjtu {
             if(*buffer == 'd') throw "in IO_getleaf:this leaf has been deleted...";
             throw "in IO_getleaf:invalid leafnode";
         }
+        char IO_getindex(PTR_FILE_CONT beg){
+            if(empty()) throw "in IO_getindex:the tree is empty";
+
+            fseek(ptr_file,beg,SEEK_SET);
+            fread(buffer, sizeof(char),IOnum,ptr_file);
+            if(*buffer == 'i'){
+                new_tmpindex();
+                memcpy(tmpindex,buffer,sizeof(Node_leaf));
+                return 'i';
+            }
+            if(*buffer == 'l') return 'l';
+            if(*buffer == 'd') throw "in IO_getindex:this index has been deleted...";
+            throw "in IO_getindex:invalid indexnode";
+        }
         inline void IO_getnodeBPT(){
             fseek(ptr_file,0,SEEK_SET);
             fread(buffer,sizeof(BPT),1,ptr_file);
@@ -271,7 +290,7 @@ namespace sjtu {
          * new_tmpleaf():清除tmpleaf中的原有内容，建立一个新的tmpleaf,以防止内存泄漏。
          * new_tmpindex()：同上。
          * new_chain():准备从文件里读取一个新的链。
-         * destroy_chain():在每一次修改树之后都要进行的操作。
+         * destroy_chain():在每一次修改树之后都要进行的操作,将isbulidchain改为false。
          */
         inline void new_tmpleaf(){
             if(tmpleaf != nullptr){
@@ -312,6 +331,7 @@ namespace sjtu {
                 delete del;
             }
             leaf = nullptr;
+            isbuildchain = false;
         }
         /**end func members__reference
          * End_getleaf():用于获得最后的叶子节点。
@@ -324,20 +344,134 @@ namespace sjtu {
             }
         }
         /**insert func members__reference
-         *
+         * INS_seek_leaf():用于查找插入key的相对位置。如果遇到相等的情况就返回-1。
+         * INS_getchain():用于获得需要修改的一条链，每次获得会将之前获得的chain全部清除。
+         *                 但是不能更改isbuildchain的值。
+         * INS_find():返回具体比插入key略大的位置。
+         * INS_inleaf():仅仅完成leaf节点的内部插入过程，修改curnum,sumnum.
+         * INS_inindex():index节点的内部插入过程，查找使用指针来比较。修改了curnum。
+         * INS_splitleaf():将chain中的叶节点分裂，并写入文件。传递了要push上去的值。
+         * INS_splitindex():将chain中的索引节点分裂，并写入文件。传递了push上去的值。
+         *                  吐槽一下curnum设置的有点狗血
          */
+        short INS_seek_leaf(const Key& key){
+            if(leaf == nullptr) throw "in INS_seek_leaf:leaf not exist";
 
+            if(key < leaf->leaf[0].keydata) return 0;
+            for(short i = 1;i < leaf->curnum;++i){
+                if(key < leaf->leaf[i]&&key > leaf->leaf[i - 1]) return i;
+            }
+            if(key > leaf->leaf[leaf->curnum - 1].keydata) return leaf->curnum;
+
+            return -1;
+        }
+        inline void INS_getchain(const Key& key){
+            new_chain();
+            char stat = IO_getchain(BPlusTree->root);
+            while(stat == '1'){
+                PTR_FILE_CONT tmpnext = Find_seek_index(tmpindex,key);
+                stat = IO_getchain(tmpnext);
+            }
+        }
+        short INS_find(const Key& key) {
+            if(empty()) throw "in INS_find:try to find in an empty tree";
+            short pos;
+            if(isbuildchain) {
+                if(key <= leaf->leaf[leaf->curnum - 1].keydata
+                   &&key >= leaf->leaf[0].keydata){
+                    pos = INS_seek_leaf(key);
+                    if(pos == -1) throw "in INS_find:find the same key";
+                    return pos;
+                }
+            }
+            else isbuildchain = true;
+
+            INS_getchain(key);
+            pos = INS_seek_leaf(key);
+            if(pos == -1) throw "in INS_find:find the same key";
+            return pos;
+        }
+        void INS_inleaf(const Key& key, const Value& value){
+            short pos = INS_find(key),i = leaf->curnum;
+            while(i > pos){
+                leaf->leaf[i] = leaf->leaf[i - 1];
+                --i;
+            }
+            leaf->leaf[pos].keydata = key;
+            leaf->leaf[pos].valdata = value;
+            ++leaf->curnum;
+            ++BPlusTree->sumnum_data;
+        }
+        void INS_inindex(data_index &info_pushup,Node_index &index,PTR_FILE_CONT son){
+            short pos = 0,i = index.curnum;
+            //这里对下一行的存在性进行了信任。
+            while (index.index[pos].next != son) ++pos;
+            while(i > pos){
+                index.index[i + 1] = index.index[i];
+                --i;
+            }
+            index.index[pos + 1] = info_pushup;
+            ++index.curnum;
+        }
+        void INS_splitleaf(data_index &info_pushup){
+            new_tmpleaf();
+            for(int i = (MAX_NUM_LEAF>>1);i < MAX_NUM_LEAF;++i)
+                tmpleaf->leaf[i - (MAX_NUM_LEAF>>1)] = leaf->leaf[i];
+
+            tmpleaf->next = leaf->next;
+            tmpleaf->prev = leaf->myself;
+            tmpleaf->curnum = MAX_NUM_LEAF - (MAX_NUM_LEAF>>1);
+            tmpleaf->myself = IO_alloc(sizeof(Node_leaf));
+            IO_write(tmpleaf);
+
+            leaf->next = tmpleaf->myself;
+            leaf->curnum = (MAX_NUM_LEAF>>1);
+            IO_write(leaf);
+
+            info_pushup.next = tmpleaf->myself;
+            info_pushup.keydata = tmpleaf->leaf[0].data;
+        }
+        void INS_splitindex(data_index &info_pushup,Node_index &index){
+            new_tmpindex();
+            for(short i = (MAX_NUM_INDEX>>1);i < MAX_NUM_INDEX;++i)
+                tmpindex->index[i - (MAX_NUM_INDEX>>1)] = index.index[i];
+
+            tmpindex->next = index.next;
+            tmpindex->prev = index.myself;
+            tmpindex->curnum = MAX_NUM_INDEX - (MAX_NUM_INDEX>>1) - 1;
+            tmpindex->myself = IO_alloc(sizeof(Node_index));
+            IO_write(tmpindex);
+
+            index.next = tmpindex->myself;
+            index.curnum = (MAX_NUM_INDEX>>1) - 1;
+            IO_write(&index);
+
+            info_pushup.next = tmpindex->myself;
+            info_pushup.keydata = tmpindex->index[0].keydata;
+        }
+        void INS_resetroot(data_index &info_pushup){
+            new_tmpindex();
+            tmpindex->index[0].next = BPlusTree->root;
+            tmpindex->index[1] = info_pushup;
+            tmpindex->curnum = 1;
+            tmpindex->myself = IO_alloc(sizeof(Node_index));
+            IO_write(tmpindex);
+
+            ++BPlusTree->height;
+            IO_write_nodeBPT();
+        }
         /**find func members__reference
          * Find_seek_index()查找index中块的相对位置，返回值为下一级索引或着叶子的索引。
          * Find_seek_leaf()查找leaf中具体数据的位置，返回偏移量。如果没有相应key的话返回-1.
-         * Find_getchain():用于获得完整的从根到叶子的一条链。每次获得会将之前获得的chain全部清除。
-         *                 但是不能更改isbuildchain的值
+         * Find_getleaf():用于找到目标叶子节点，并且读入内存。但是进行此操作之后内存中未保存整个一条链。
          */
         inline PTR_FILE_CONT Find_seek_index(Node_index* index,const Key& findingkey){
             if(index == nullptr) throw "in F_seek_index:index not exist";
 
-            for(short i = 1;i <= index->curnum;++i)
-                if(findingkey < index->index[i].keydata) return index->index[i - 1].next;
+            if(findingkey < index->index[1].keydata) return index->index[0].next;
+            for(short i = 2;i <= index->curnum;++i)
+                if(findingkey < index->index[i].keydata&&findingkey >= index->index[i - 1].keydata)
+                    return index->index[i - 1].next;
             return index->index[index->curnum].next;
         }
         inline short Find_seek_leaf(Node_leaf* leaf,const Key& findingkey){
@@ -348,13 +482,14 @@ namespace sjtu {
             }
             return -1;
         }
-        inline void Find_getchain(const Key& key){
-            new_chain();
-            char stat = IO_getchain(BPlusTree->root);
-            while(stat == '1'){
-                PTR_FILE_CONT tmpnext = Find_seek_index(tmpindex,key);
-                stat = IO_getchain(tmpnext);
+        inline void Find_getleaf(const Key& key){
+            PTR_FILE_CONT tmpnext = BPlusTree->root;
+            char stat = IO_getindex(tmpnext);
+            while(stat == 'i'){
+                tmpnext = Find_seek_index(tmpindex,key);
+                stat = IO_getindex(tmpnext);
             }
+            if(stat == 'l') IO_getleaf(tmpnext);
         }
     public:
         typedef pair<const Key, Value> value_type;
@@ -466,7 +601,60 @@ namespace sjtu {
         // Return a pair, the first of the pair is the iterator point to the new
         // element, the second of the pair is Success if it is successfully inserted
         pair<iterator, OperationResult> insert(const Key& key, const Value& value) {
+            //若空，建树。
+            if(empty()){
+                new_tmpleaf();
+                tmpleaf->leaf[0].keydata = key;
+                tmpleaf->leaf[0].valdata = value;
+                tmpleaf->curnum = 1;
+                tmpleaf->myself = IO_alloc(sizeof(Node_leaf));
+                IO_write(tmpleaf);
 
+                BPlusTree->sumnum_data = 1;
+                BPlusTree->height = 1;
+                BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
+                IO_write_nodeBPT();
+                return pair<iterator, OperationResult>
+                        (iterator(this,tmpleaf->myself,0),Success);
+            }
+            //非空，第一步正常find并且插入叶子。
+            INS_inleaf(key,value);
+            //之后“递归”修改并且写回文件
+            //若不需要分裂,写入叶节点和基本信息即可。
+            if(leaf->curnum < MAX_NUM_LEAF){
+                IO_write(tmpleaf);
+                IO_write_nodeBPT();
+                destroy_chain();
+                return pair<iterator, OperationResult>
+                        (iterator(this,leaf->myself,leaf->curnum - (short)1),Success);
+            }
+
+            data_index info_pushup; //该变量用来存储向上传递的信息。
+            PTR_FILE_CONT son = leaf->myself;//用于查找父亲中自己的位置。
+            //分裂叶节点
+            INS_splitleaf(info_pushup);
+            if(indexstack->isStackempty()) INS_resetroot(info_pushup);
+            //向上插入
+            Node_index tmpind = indexstack->pop();
+            INS_inindex(info_pushup,tmpind,son);
+            son = tmpind.myself;
+            while(tmpind.curnum == MAX_NUM_INDEX - 1){
+                //分裂索引节点
+                INS_splitindex(info_pushup,tmpind);
+                if(indexstack->isStackempty()) break;
+                //向上插入
+                tmpind = indexstack->pop();
+                INS_inindex(info_pushup,tmpind,son);
+                son = tmpind.myself;
+            }
+            if(indexstack->isStackempty()) INS_resetroot(info_pushup);
+            else if(tmpind.curnum < MAX_NUM_INDEX - 1) {
+                IO_write(&tmpind);
+                IO_write_nodeBPT();
+            }
+            destroy_chain();
+            return pair<iterator, OperationResult>
+                    (find(key),Success);
         }
         // Erase: Erase the Key-Value
         // Return Success if it is successfully erased
@@ -561,7 +749,9 @@ namespace sjtu {
         Value at(const Key& key){
             const_iterator tmp = find(key);
             if(tmp == cend()) throw "in at:key not exist";
-            return leaf->leaf[tmp.pos_in_leafnode].valdata;
+
+            IO_getleaf(tmp.offset_leafnode);
+            return tmpleaf->leaf[tmp.pos_in_leafnode].valdata;
         }
         /**
          * Returns the number of elements with key
@@ -570,7 +760,9 @@ namespace sjtu {
          */
         ///这**是想干什么啊……
         size_t count(const Key& key) const {
-
+            const_iterator tmp = find(key);
+            if(tmp == cend()) return 0;
+            else return 1;
         }
         /**
          * Finds an element with key equivalent to key.
@@ -578,45 +770,33 @@ namespace sjtu {
          * Iterator to an element with key equivalent to key.
          *   If no such element is found, past-the-end (see end()) iterator is
          * returned.
-         *
-         * 同时完成getchain的功能，并做了一点点优化，在leaf未发生改变的时候不重新读入。
          */
         ///问题：如果是空树应该怎么办呢？
         iterator find(const Key& key) {
-            if(empty()) throw "in find1:try to find in an empty tree";
+            if(empty()) throw "in it_find:try to find in an empty tree";
             short pos;
-            if(isbuildchain) {
-                if(key <= leaf->leaf[leaf->curnum - 1].keydata
-                   &&key >= leaf->leaf[0].keydata){
-                    pos = Find_seek_leaf(leaf,key);
-                    if(pos != -1) return iterator(this,leaf->myself,pos);
-                    else return end();
-                }
-            }
-            else isbuildchain = true;
-
-            Find_getchain(key);
-            pos = Find_seek_leaf(leaf,key);
+            Find_getleaf(key);
+            pos = Find_seek_leaf(tmpleaf,key);
             if(pos != -1) return iterator(this,leaf->myself,pos);
             else return end();
         }
         const_iterator find(const Key& key) const {
-            if(empty()) throw "in find2:try to find in an empty tree";
+            if(empty()) throw "in const_it_find:try to find in an empty tree";
             short pos;
-            if(isbuildchain) {
-                if(key <= leaf->leaf[leaf->curnum - 1].keydata
-                   &&key >= leaf->leaf[0].keydata){
-                    pos = Find_seek_leaf(leaf,key);
-                    if(pos != -1) return const_iterator(this,leaf->myself,pos);
-                    else return cend();
-                }
-            }
-            else isbuildchain = true;
-
-            Find_getchain(key);
-            pos = Find_seek_leaf(leaf,key);
+            Find_getleaf(key);
+            pos = Find_seek_leaf(tmpleaf,key);
             if(pos != -1) return const_iterator(this,leaf->myself,pos);
             else return cend();
         }
     };
 }  // namespace sjtu
+/*
+       short INS_seek_index(const Key& key,const Node_index& index){
+           if(index.curnum == 0) throw "INS_seek_index: index is empty";
+
+           if(key < index.index[1].keydata) return 1;
+           for(short i = 2;i <= index.curnum;++i)
+               if(key < index.index[i].keydata&&key >= index.index[i - 1].keydata)
+                   return i;
+           return index.curnum + (short)1;
+       }*/
