@@ -7,8 +7,13 @@
 #include <cstring>
 
 namespace sjtu {
+//#define DEBUGPROCESS
     typedef long PTR_FILE_CONT;///说实话这个我真的不知道应该设置为哪种数据类型。
+#ifdef DEBUGPROCESS
+    const int IOnum = 55;
+#else
     const int IOnum = 4096;
+#endif
     //目前选择写在一个文件里面吧，这样的IO次数可能也不多。
     char EMPTY_NAME_FILE[10] = "my.dat";///还有这个，，文件命名应该怎么命名啊
     const size_t PTR_FILE_SIZE = sizeof(PTR_FILE_CONT);
@@ -25,13 +30,13 @@ namespace sjtu {
 #else
     private:
 #endif
-        static const size_t MAX_NUM_INDEX = 5;
-        //static const size_t MAX_NUM_INDEX = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
-        //                                     - sizeof(char)) / sizeof(data_index);
+        //static const size_t MAX_NUM_INDEX = 5;
+        static const size_t MAX_NUM_INDEX = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
+                                             - sizeof(char) - sizeof(data_index*)) / sizeof(data_index);
         static const size_t MIN_NUM_INDEX = MAX_NUM_INDEX>>1;
-        static const size_t MAX_NUM_LEAF = 4;
-        //static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
-        //                                  - sizeof(char)) / sizeof(data_leaf);
+        //static const size_t MAX_NUM_LEAF = 4;
+        static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
+                                            - sizeof(char) - sizeof(data_leaf*)) / sizeof(data_leaf);
         static const size_t MIN_NUM_LEAF = MAX_NUM_LEAF>>1;
     private:
         ///所有的拷贝构造都没写，蛤。
@@ -138,7 +143,7 @@ namespace sjtu {
         char buffer[IOnum];
         FILE* ptr_file;
         char name[50];
-        bool isopen;
+        bool isfexist;
         //Basic info of BPTree
         BPT* BPlusTree;
         //以下是每一次修改树的操作需要用到的信息
@@ -180,28 +185,24 @@ namespace sjtu {
         };
         //仅供default构造函数使用。没有写复制构造相关的。
         void IO_init(){
-            if(isopen){
-                if(!fclose(ptr_file)) throw "in IO_init:the file cannot be renewed.";
-                ptr_file = fopen(name,"wb+");
-                if(ptr_file == nullptr)throw "in IO_init:the file cannot be initialed.";
+            ptr_file = fopen(name,"rb+");
+            if(ptr_file == nullptr){
+                ptr_file = fopen(name,"w+");
+                fclose(ptr_file);
+                ptr_file = fopen(name,"rb+");
+                isfexist = false;
+            }else isfexist = true;
+
+            if(isfexist){
+                IO_getnodeBPT();
             }else{
-                ptr_file = fopen(name,"wb+");
-                if(ptr_file == nullptr)throw "in IO_init:the file cannot be initialed.";
-                isopen = true;
+                IO_alloc(sizeof(BPT));
+                IO_write_nodeBPT();
             }
-            IO_alloc(sizeof(BPT));
-            IO_write_nodeBPT();
         };
         inline void IO_destruct(){
-            if(isopen) {
-                int tmp = fclose(ptr_file);
-                if(tmp == EOF) throw "in IO_destruct:the file cannot be closed.";
-                isopen = false;
-            }else{
-                printf("try to destruct the file when it's not open");
-                ptr_file = fopen(name,"wb+");
-                fclose(ptr_file);
-            }
+            int tmp = fclose(ptr_file);
+            if(tmp == EOF) throw "in IO_destruct:the file cannot be closed.";
         }
 
         char IO_getchain(PTR_FILE_CONT beg){
@@ -254,7 +255,7 @@ namespace sjtu {
         inline void IO_getnodeBPT(){
             fseek(ptr_file,0,SEEK_SET);
             fread(buffer,sizeof(BPT),1,ptr_file);
-            memcpy(&BPlusTree,buffer,sizeof(BPT));
+            memcpy(BPlusTree,buffer,sizeof(BPT));
         }
 
         void IO_write(Node_leaf* tmpl){
@@ -262,12 +263,12 @@ namespace sjtu {
             if(!(tmpl->type == 'l'||tmpl->type == 'd'))
                 throw "in IO_write_leaf:invalid leafnode= =";
 
-            memcpy(buffer,tmpl, sizeof(Node_leaf));
+            memcpy(buffer,tmpl,sizeof(Node_leaf));
             fseek(ptr_file,tmpl->myself,SEEK_SET);
             int tmp = fwrite(buffer, sizeof(char),IOnum,ptr_file);
             if(!tmp) throw "in IO_write_leaf:cannot fwrite";
             fflush(ptr_file);
-        };
+        }
         void IO_write(Node_index* tmpi){
             if(tmpi == nullptr)throw "in IO_write_index:the index is null= =";
             if(!(tmpi->type == 'i'||tmpi->type == 'd'))
@@ -280,7 +281,8 @@ namespace sjtu {
             fflush(ptr_file);
         };
         inline void IO_write_nodeBPT(){
-            int tmp = fwrite(&BPlusTree, sizeof(BPT),1,ptr_file);
+            fseek(ptr_file,0,SEEK_SET);
+            int tmp = fwrite(BPlusTree, sizeof(BPT),1,ptr_file);
             if(!tmp) throw "in IO_write_nodeBPT:cannot write node BPT";
             fflush(ptr_file);
         }
@@ -373,7 +375,7 @@ namespace sjtu {
         inline void INS_getchain(const Key& key){
             new_chain();
             char stat = IO_getchain(BPlusTree->root);
-            while(stat == 'l'){
+            while(stat == '1'){
                 PTR_FILE_CONT tmpnext = Find_seek_index(tmpindex,key);
                 stat = IO_getchain(tmpnext);
             }
@@ -426,7 +428,7 @@ namespace sjtu {
             tmpleaf->next = leaf->next;
             tmpleaf->prev = leaf->myself;
             tmpleaf->curnum = MAX_NUM_LEAF - (MAX_NUM_LEAF>>1);
-            tmpleaf->myself = IO_alloc(sizeof(Node_leaf));
+            tmpleaf->myself = IO_alloc();
             IO_write(tmpleaf);
 
             leaf->next = tmpleaf->myself;
@@ -444,7 +446,7 @@ namespace sjtu {
             tmpindex->next = index.next;
             tmpindex->prev = index.myself;
             tmpindex->curnum = MAX_NUM_INDEX - (MAX_NUM_INDEX>>1) - 1;
-            tmpindex->myself = IO_alloc(sizeof(Node_index));
+            tmpindex->myself = IO_alloc();
             IO_write(tmpindex);
 
             index.next = tmpindex->myself;
@@ -459,7 +461,7 @@ namespace sjtu {
             tmpindex->index[0].next = BPlusTree->root;
             tmpindex->index[1] = info_pushup;
             tmpindex->curnum = 1;
-            tmpindex->myself = IO_alloc(sizeof(Node_index));
+            tmpindex->myself = IO_alloc();
             IO_write(tmpindex);
 
             ++BPlusTree->height;
@@ -610,7 +612,7 @@ namespace sjtu {
             }
         };
         // Default Constructor and Copy Constructor
-        BTree():ptr_file(nullptr),isopen(false),isbuildchain(false),
+        BTree():ptr_file(nullptr),isbuildchain(false),
                 tmpindex(nullptr),tmpleaf(nullptr),leaf(nullptr),indexstack(nullptr){
             BPlusTree = new BPT;
             strcpy(name,EMPTY_NAME_FILE);
@@ -640,7 +642,7 @@ namespace sjtu {
                 tmpleaf->leaf[0].keydata = key;
                 tmpleaf->leaf[0].valdata = value;
                 tmpleaf->curnum = 1;
-                tmpleaf->myself = IO_alloc(sizeof(Node_leaf));
+                tmpleaf->myself = IO_alloc();
                 IO_write(tmpleaf);
 
                 BPlusTree->sumnum_data = 1;
@@ -679,17 +681,32 @@ namespace sjtu {
             while(tmpind.curnum == MAX_NUM_INDEX - 1){
                 //分裂索引节点
                 INS_splitindex(info_pushup,tmpind);
-                if(indexstack->isStackempty()) break;
+                if(indexstack->isStackempty()){
+                    INS_resetroot(info_pushup);
+                    destroy_chain();
+                    return pair<iterator, OperationResult>
+                            (iterator(),Success);
+                }
                 //向上插入
                 tmpind = indexstack->pop();
                 INS_inindex(info_pushup,tmpind,son);
                 son = tmpind.myself;
             }
+            /*
+            if(tmpind.curnum < MAX_NUM_INDEX - 1){
+                IO_write(&tmpind);
+                IO_write_nodeBPT();
+            }else if(indexstack->isStackempty()){
+                INS_resetroot(info_pushup);
+            }*/
+            /*
             if(indexstack->isStackempty()) INS_resetroot(info_pushup);
             else if(tmpind.curnum < MAX_NUM_INDEX - 1) {
                 IO_write(&tmpind);
                 IO_write_nodeBPT();
-            }
+            }*/
+            IO_write(&tmpind);
+            IO_write_nodeBPT();
             destroy_chain();
             return pair<iterator, OperationResult>
                     (iterator(),Success);
@@ -708,7 +725,7 @@ namespace sjtu {
                 //以下这个if表示对firstleaf的完全信任。
                 if(BPlusTree->root == -1){
                     new_tmpleaf();
-                    tmpleaf->myself = IO_alloc(IOnum);
+                    tmpleaf->myself = IO_alloc();
                     BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
                     IO_write(tmpleaf);
                 }
@@ -720,7 +737,7 @@ namespace sjtu {
                 //以下这个if表示对firstleaf的完全信任。
                 if(BPlusTree->root == -1){
                     new_tmpleaf();
-                    tmpleaf->myself = IO_alloc(IOnum);
+                    tmpleaf->myself = IO_alloc();
                     BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
                     IO_write(tmpleaf);
                 }
@@ -734,7 +751,7 @@ namespace sjtu {
                 //以下这个if表示对firstleaf的完全信任。
                 if(BPlusTree->root == -1){
                     new_tmpleaf();
-                    tmpleaf->myself = IO_alloc(IOnum);
+                    tmpleaf->myself = IO_alloc();
                     BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
                     IO_write(tmpleaf);
                 }
@@ -749,7 +766,7 @@ namespace sjtu {
                 //以下这个if表示对firstleaf的完全信任。
                 if(BPlusTree->root == -1){
                     new_tmpleaf();
-                    tmpleaf->myself = IO_alloc(IOnum);
+                    tmpleaf->myself = IO_alloc();
                     BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
                     IO_write(tmpleaf);
                 }
@@ -796,7 +813,7 @@ namespace sjtu {
          *   that compares equivalent to the specified argument,
          * The default method of check the equivalence is !(a < b || b > a)
          */
-        ///这**是想干什么啊……
+
         size_t count(const Key& key) const {
             const_iterator tmp = find(key);
             if(tmp == cend()) return 0;
@@ -827,14 +844,4 @@ namespace sjtu {
             else return cend();
         }
     };
-}  // namespace sjtu
-/*
-       short INS_seek_index(const Key& key,const Node_index& index){
-           if(index.curnum == 0) throw "INS_seek_index: index is empty";
-
-           if(key < index.index[1].keydata) return 1;
-           for(short i = 2;i <= index.curnum;++i)
-               if(key < index.index[i].keydata&&key >= index.index[i - 1].keydata)
-                   return i;
-           return index.curnum + (short)1;
-       }*/
+} 
