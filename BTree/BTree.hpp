@@ -6,9 +6,16 @@
 #include <cstdio>
 #include <cstring>
 
+///需要改的几个地方：
+///动态化IOnum
+///动态化命名
+///增加尾节点
+///优化end():这个需要维护rear,但是代价还不小。
+///erease():看时间了
+///想到再写。
 namespace sjtu {
 //#define DEBUGPROCESS
-    typedef long PTR_FILE_CONT;///说实话这个我真的不知道应该设置为哪种数据类型。
+    typedef size_t PTR_FILE_CONT;///说实话这个我真的不知道应该设置为哪种数据类型。
 #ifdef DEBUGPROCESS
     const int IOnum = 55;
 #else
@@ -66,10 +73,11 @@ namespace sjtu {
         struct BPT{
             PTR_FILE_CONT root;
             PTR_FILE_CONT firstleaf;
+            PTR_FILE_CONT lastleaf;
             PTR_FILE_CONT endoffset_file;
             size_t sumnum_data;
             int height;//这里height是包含叶子那一层的。
-            BPT():root(-1),firstleaf(-1),endoffset_file(0),sumnum_data(0),height(0){};
+            BPT():root(-1),firstleaf(-1),lastleaf(-1),endoffset_file(0),sumnum_data(0),height(0){};
         };
 
         class myStack{
@@ -718,7 +726,7 @@ namespace sjtu {
 
                 BPlusTree->sumnum_data = 1;
                 BPlusTree->height = 1;
-                BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
+                BPlusTree->root = BPlusTree->firstleaf = BPlusTree->lastleaf = tmpleaf->myself;
                 IO_write_nodeBPT();
                 return pair<iterator, OperationResult>
                         (iterator(),Success);
