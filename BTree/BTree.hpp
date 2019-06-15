@@ -30,11 +30,9 @@ namespace sjtu {
 #else
     private:
 #endif
-        //static const size_t MAX_NUM_INDEX = 5;
         static const size_t MAX_NUM_INDEX = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
                                              - sizeof(char) - sizeof(data_index*)) / sizeof(data_index);
         static const size_t MIN_NUM_INDEX = MAX_NUM_INDEX>>1;
-        //static const size_t MAX_NUM_LEAF = 4;
         static const size_t MAX_NUM_LEAF = (IOnum - 3 * PTR_FILE_SIZE - sizeof(short)
                                             - sizeof(char) - sizeof(data_leaf*)) / sizeof(data_leaf);
         static const size_t MIN_NUM_LEAF = MAX_NUM_LEAF>>1;
@@ -138,7 +136,6 @@ namespace sjtu {
 #else
     private:
 #endif
-        ///下面这些部分到底谁该public呢？
         //IO members
         char buffer[IOnum];
         FILE* ptr_file;
@@ -361,7 +358,7 @@ namespace sjtu {
          * INS_splitindex():将chain中的索引节点分裂，并写入文件。传递了push上去的值。
          *                  吐槽一下curnum设置的有点狗血
          */
-        short INS_seek_leaf(const Key& key){
+        short INS_seek_leaf(const Key& key)const{
             if(leaf == nullptr) throw "in INS_seek_leaf:leaf not exist";
 
             if(key < leaf->leaf[0].keydata) return 0;
@@ -398,7 +395,7 @@ namespace sjtu {
             if(pos == -1) throw "in INS_find:find the same key";
             return pos;
         }
-        void INS_inleaf(const Key& key, const Value& value){
+        void INS_inleaf(Key key, Value value){
             short pos = INS_find(key),i = leaf->curnum;
             while(i > pos){
                 leaf->leaf[i] = leaf->leaf[i - 1];
@@ -473,7 +470,7 @@ namespace sjtu {
          * Find_seek_leaf()查找leaf中具体数据的位置，返回偏移量。如果没有相应key的话返回-1.
          * Find_getleaf():用于找到目标叶子节点，并且读入内存。但是进行此操作之后内存中未保存整个一条链。
          */
-        inline PTR_FILE_CONT Find_seek_index(Node_index* index,const Key& findingkey){
+        inline PTR_FILE_CONT Find_seek_index(Node_index* index, const Key& findingkey){
             if(index == nullptr) throw "in F_seek_index:index not exist";
 
             if(findingkey < index->index[1].keydata) return index->index[0].next;
@@ -482,7 +479,7 @@ namespace sjtu {
                     return index->index[i - 1].next;
             return index->index[index->curnum].next;
         }
-        inline short Find_seek_leaf(Node_leaf* leaf,const Key& findingkey){
+        inline short Find_seek_leaf(Node_leaf* leaf, const Key& findingkey){
             if(leaf == nullptr) throw "in F_seek_leaf:leaf not exist";
 
             for(short i = 0;i < leaf->curnum;++i){
@@ -513,7 +510,18 @@ namespace sjtu {
             short pos_in_leafnode;//0-Based
         public:
             bool modify(const Value& value){
-
+                Node_leaf tmpl;
+                fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                tmpl.leaf[pos_in_leafnode].valdata = value;
+                fwrite(&tmpl, sizeof(Node_leaf),1,Tree->ptr_file);
+                return true;
+            }
+            Value getValue(){
+                Node_leaf tmpl;
+                fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                return tmpl.leaf[pos_in_leafnode].valdata;
             }
             iterator() {
                 Tree = nullptr;//why?是不是因为它读不成自己所在的树
@@ -528,18 +536,71 @@ namespace sjtu {
                 offset_leafnode = other.offset_leafnode;
                 pos_in_leafnode = other.pos_in_leafnode;
             }
+            iterator(const const_iterator& other){
+                Tree = other.Tree;
+                offset_leafnode = other.offset_leafnode;
+                pos_in_leafnode = other.pos_in_leafnode;
+            }
             // Return a new iterator which points to the n-next elements
             iterator operator++(int) {
-                // Todo iterator++
+                PTR_FILE_CONT tmpoffset = offset_leafnode;
+                short tmppos = pos_in_leafnode;
+                Node_leaf tmpl;
+                fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                if(pos_in_leafnode == tmpl.curnum - 1){
+                    if(tmpl.next == -1) throw "in iterator ++:the last leaf";
+                    offset_leafnode = tmpl.next;
+                    pos_in_leafnode = 0;
+                    return iterator(Tree,tmpoffset,tmppos);
+                }
+                ++pos_in_leafnode;
+                return iterator(Tree,tmpoffset,tmppos);
             }
             iterator& operator++() {
-                // Todo ++iterator
+                Node_leaf tmpl;
+                fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                if(pos_in_leafnode == tmpl.curnum - 1){
+                    if(tmpl.next == -1) throw "in iterator ++:the last leaf";
+                    offset_leafnode = tmpl.next;
+                    pos_in_leafnode = 0;
+                    return *this;
+                }
+                ++pos_in_leafnode;
+                return *this;
             }
             iterator operator--(int) {
-                // Todo iterator--
+                PTR_FILE_CONT tmpoffset = offset_leafnode;
+                short tmppos = pos_in_leafnode;
+                Node_leaf tmpl;
+                fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                if(pos_in_leafnode == 0){
+                    if(tmpl.prev == -1) throw "in iterator --:the first leaf";
+                    offset_leafnode = tmpl.prev;
+                    fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                    fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                    pos_in_leafnode = tmpl.curnum - 1;
+                    return iterator(Tree, tmpoffset,tmppos);
+                }
+                --pos_in_leafnode;
+                return iterator(Tree, tmpoffset,tmppos);
             }
             iterator& operator--() {
-                // Todo --iterator
+                Node_leaf tmpl;
+                fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                if(pos_in_leafnode == 0){
+                    if(tmpl.prev == -1) throw "in iterator --:the first leaf";
+                    offset_leafnode = tmpl.prev;
+                    fseek(Tree->ptr_file,offset_leafnode,SEEK_SET);
+                    fread(&tmpl,sizeof(Node_leaf),1,Tree->ptr_file);
+                    pos_in_leafnode = tmpl.curnum - 1;
+                    return *this;
+                }
+                --pos_in_leafnode;
+                return *this;
             }
             // Overloaded of operator '==' and '!='
             // Check whether the iterators are same
@@ -569,7 +630,7 @@ namespace sjtu {
             //  and it should be able to construct from an iterator.
         private:
             // Your private members go here
-            BTree* Tree;
+            const BTree* Tree;
             PTR_FILE_CONT offset_leafnode;//记录所在叶子节点的块
             int pos_in_leafnode;
         public:
@@ -583,14 +644,21 @@ namespace sjtu {
                 offset_leafnode = other.offset_leafnode;
                 pos_in_leafnode = other.pos_in_leafnode;
             }
-            const_iterator(const iterator& other) {
+            const_iterator(iterator other) {
                 Tree = other.Tree;
                 offset_leafnode = other.offset_leafnode;
                 pos_in_leafnode = other.pos_in_leafnode;
             }
-            const_iterator(BTree* t,PTR_FILE_CONT o,short p)
-                    :Tree(t),offset_leafnode(o),pos_in_leafnode(p)
-            {};
+            const_iterator(const BTree* t,PTR_FILE_CONT o,short p){
+                Tree = t;
+                offset_leafnode = o;
+                pos_in_leafnode = p;
+            };
+            void set_con_it(BTree* t,PTR_FILE_CONT o,short p){
+                Tree = t;
+                offset_leafnode = o;
+                pos_in_leafnode = p;
+            }
             // And other methods in iterator, please fill by yourself.
             bool operator==(const iterator& rhs) const {
                 if(rhs.Tree == Tree&&rhs.offset_leafnode == offset_leafnode
@@ -762,19 +830,17 @@ namespace sjtu {
             }
         }
         const_iterator cend() const {
-            if(empty()){
-                //以下这个if表示对firstleaf的完全信任。
-                if(BPlusTree->root == -1){
-                    new_tmpleaf();
-                    tmpleaf->myself = IO_alloc();
-                    BPlusTree->root = BPlusTree->firstleaf = tmpleaf->myself;
-                    IO_write(tmpleaf);
-                }
-                return const_iterator(this,BPlusTree->firstleaf,0);
-            }else{
-                End_getleaf();
-                return const_iterator(this,tmpleaf->myself,tmpleaf->curnum);
+            if(BPlusTree->sumnum_data == 0) throw "in cend():empty tree";
+            Node_leaf tmpl;
+            FILE* tmpptrf = ptr_file;
+            fseek(tmpptrf,BPlusTree->firstleaf,SEEK_SET);
+            fread(&tmpl, sizeof(Node_leaf),1,tmpptrf);
+
+            while(tmpl.next != -1){
+                fseek(tmpptrf,tmpl.next,SEEK_SET);
+                fread(&tmpl, sizeof(Node_leaf),1,tmpptrf);
             }
+            return const_iterator(this,tmpl.myself,tmpl.curnum);
         }
         // Check whether this BTree is empty
         //use BPT::sumnum_Data
@@ -805,6 +871,7 @@ namespace sjtu {
             iterator tmp = find(key);
             if(tmp == end()) throw "in at:key not exist";
 
+            new_tmpleaf();
             IO_getleaf(tmp.offset_leafnode);
             return tmpleaf->leaf[tmp.pos_in_leafnode].valdata;
         }
@@ -840,8 +907,8 @@ namespace sjtu {
             short pos;
             Find_getleaf(key);
             pos = Find_seek_leaf(tmpleaf,key);
-            if(pos != -1) return const_iterator();
+            if(pos != -1) return const_iterator(this,tmpleaf->myself,pos);
             else return cend();
         }
     };
-} 
+}  // namespace sjtu
